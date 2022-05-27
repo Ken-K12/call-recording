@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Voice Mail Viewer</title>
+    <!-- semantic.css  -->
+    <link rel="stylesheet" type="text/css"
+    href="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.4.1/semantic.min.css">
+    <!-- aws sdk -->
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.283.1.min.js"></script>
+    <!-- jquery -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <!-- semantic.js  -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.4.1/semantic.min.js"></script>    
+  </head>
+  <body>
+    <div class="ui container" style="margin-top: 100px;">
+        <h1 id="time" class="ui header">留守番電話</h1>     
+        <audio id="sound" preload="auto">
+        </audio>
+
+        <table id="contents" class="ui celled table center aligned" border="1">
+        <script>
+            // リージョンの指定
+            AWS.config.region = 'ap-northeast-1'; 
+            // クレデンシャル情報
+            AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+                // PoolIdの設定
+                IdentityPoolId: 'ap-northeast-1:xxxxxxxxx',
+            });
+            console.log('##########credentials##############')
+            console.log(AWS.config.credentials);
+            
+            // バケット名の指定
+            const bucketName = 'logical-voice-mail-wav-file';
+            // s3インスタンス化
+            const s3 = new AWS.S3();
+
+
+            async function refresh(){
+                // バケットのURLの指定
+                const contactDetailURL = "https://xxxxxxxx/connect/contact-trace-records/details/";
+                // S3オブジェクト一覧の取得
+                const list = await s3.listObjects({Bucket: bucketName}).promise();
+                // オブジェクト名を取得
+                const keys = list.Contents.map( v => v.Key );
+                let items = await Promise.all(keys.map(async (key)=>{
+                    // S3上のオブジェクトのタグ情報を取得する
+                    const tagging = await s3.getObjectTagging({Bucket: bucketName, Key: key }).promise();
+                    // 顧客電話番号
+                    const customerEndpoint = tagging.TagSet.find((v => { return v.Key == "customerEndpoint"}))["Value"];
+                    // コンタクトID
+                    const contactId = tagging.TagSet.find((v => { return v.Key == "contactId"}))["Value"];                 
+                    // 開始時間
+                    const startTimestamp = Number(tagging.TagSet.find((v => { return v.Key == "startTimestamp"}))["Value"]);
+                    // 配列の作成
+                    const item = {
+                        customerEndpoint: customerEndpoint,
+                        startTimestamp: dateString(new Date(startTimestamp)), // yyyy/mm/dd hh:mm
+                        key: key,
+                        contactId: contactId,
+                    };
+                    return item;
+                }));
+
+                // 録音時間でソートする
+                items = items.sort((a, b) => b.startTimestamp - a.startTimestamp);
+
+                // テーブルの作成
+                const table = $("#contents");
+                const tr = table.append($("<tr id='foo'></tr>"))
+                $('#foo').append("<th>着信時間</th>")
+                $('#foo').append("<th>発信番号</th>")
+                $('#foo').append("<th>コンタクトID</th>")                
+                $('#foo').append("<th>録音</th>")
+
+
+                // 一覧の表示
+                items.forEach(async function(item,index){
+                    const customerEndpoint = $("<td></td>").text(item.customerEndpoint);
+                    const startTimestamp = $("<td></td>").text(item.startTimestamp);
+
+                    const contactId = $(`<td><a href='${contactDetailURL + item.contactId}?tz=Asia/Tokyo' target='_blank'>${item.contactId}</a></td>`);
+
+                    const listenButton = $("<td><img src=listen.png width='40' height='40'></td>").click(()=> {listen(listenButton,item.key)});
+                    const tr = table.append($("<tr id=" + String(index) + ">" + "</tr>"));
+                    await $("#"+String(index)).append(startTimestamp);
+                    $("#"+String(index)).append(customerEndpoint);
+                    $("#"+String(index)).append(contactId);
+                    $("#"+String(index)).append(listenButton);
+                });
+            }
+
+            // reflesh関数の実行
+            refresh();
+
+            // スピーカーのアイコンをクリックした際にWAVファイルを取得する
+            async function listen(element, key) {
+                var params = {
+                    Bucket: bucketName,
+                    Key: key
+                };
+                const data = await s3.getObject(params).promise();
+                var blob = new Blob([data.Body], {type : 'audio/wav'});
+                element.html('<audio src=' + URL.createObjectURL(blob) + ' controls></audio>');
+            }
+
+            function dateString(date) {
+                const year = date.getFullYear();
+                const mon = (date.getMonth() + 1);
+                const day = date.getDate();
+                const hour = date.getHours();
+                const min = date.getMinutes();
+
+                const space = (n) => {
+                    return ('0' + (n)).slice(-2)
+                }
+
+                let result = year + '/';
+                result += space(mon) + '/';
+                result += space(day) + ' ';
+                result += space(hour) + ':';
+                result += space(min);
+                return result;
+            }
+
+        </script>
+    </div>
+</body>
+</html>
